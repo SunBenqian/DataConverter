@@ -1,0 +1,188 @@
+module DataConverter (
+  input  CLK_30MHZ,
+  input  CLK_48MHZ,
+  input  RST,
+  input  DIN,
+  input  MODE,
+  output  [7:0] DOUT_A,
+  output  [7:0] DOUT_B,
+  output  [7:0] DOUT_C,
+  output  CLK_OUT,
+  output  VALID
+);
+
+  // 常量定义
+  parameter FRAME_START = 10'b1111111111;  // 帧起始标志
+  parameter SYS_CLK_FREQ = 48_000_000;  // 输入系统时钟频率
+  parameter OUT_CLK_FREQ = 30_000_000;  // 输出时钟频率
+
+  // 寄存器定义
+  reg [9:0] frame_sync;  // 帧同步寄存器
+  reg [9:0] data_buffer[0:89];  // 数据缓存寄存器
+  reg [9:0] byte_counter;  // 字节计数器
+  reg [9:0] valid_counter;  // 有效数据计数器
+  reg counter;
+  reg [15:0] clk_counter;
+  reg clk_out;
+  reg [9:0] shift_reg;  // 用于接收串行数据的移位寄存器
+  reg [15:0] compare_value;
+  // 输出寄存器定义
+  reg [7:0] dout_a_reg;
+  reg [7:0] dout_b_reg;
+  reg [7:0] dout_c_reg;
+  reg clk_out_reg;
+  reg valid_reg;
+  reg i;
+  integer k;
+  reg j;
+
+  always @(posedge CLK_30MHZ or negedge RST)
+ begin
+    if (!RST) 
+begin
+      frame_sync <= 0;  // 复位时将 frame_sync 设置为帧起始标志
+    for ( k = 0; k <= 89; k = k + 1) 
+    begin // 将数据缓存器重置为0
+    	data_buffer[k] = 0;
+    end 
+      byte_counter <= 0;  // 将字节计数器重置为0
+      valid_counter <= 0;  // 将有效数据计数器重置为0
+      dout_a_reg <= 0;  // 将 DOUT_A 寄存器重置为0
+      dout_b_reg <= 0;  // 将 DOUT_B 寄存器重置为0
+      dout_c_reg <= 0;  // 将 DOUT_C 寄存器重置为0
+      clk_out_reg <= 0;  // 将 CLK_OUT 寄存器重置为0
+      valid_reg <= 0;  // 将 VALID 寄存器重置为0
+      counter <= 0;
+      shift_reg <= 8'b0;  // 初始化移位寄存器
+      i<=0;
+      j<=0;
+end else
+	begin
+		if (frame_sync == FRAME_START) 
+		begin
+			j<=j+1;
+		end else
+		begin
+			if(DIN == 1)
+			frame_sync <= {frame_sync[9:1], DIN};
+			else 
+			frame_sync <= {1'b0, frame_sync[9:1]};
+		end
+                     if (frame_sync == FRAME_START) 
+                     begin
+			if(i<90)
+			begin
+				if (counter < 10) 
+    				begin
+        					shift_reg <= {shift_reg[8:0], DIN};  // 将新的数据位存储到移位寄存器
+        					counter <= counter + 1;  // 增加位计数器
+     	 			end
+      
+ 				if (counter == 10) 
+				begin
+        					data_buffer[i] <= shift_reg;  // 将移位寄存器的值存储到数据缓冲区
+        					counter <= 0;  // 重置位计数器
+       					byte_counter <= byte_counter + 1;  // 字节计数器递增
+                               				if (data_buffer[i][9:2]  != 8'b 00000000) 
+				               		begin
+							if(valid_counter <721)
+							begin
+                               	valid_counter <= valid_counter + 1;  // 有效数据计数器递增
+							end
+							else 
+							begin
+								valid_counter <= 0;
+							end
+        				       		end
+					i<=i+1;
+
+     			end
+			end else
+				begin
+					i<=0;
+				end
+
+        		// 根据 MODE 对数据进行处理
+       		 case (MODE)
+          		0: begin
+            				// MODE = 0，DOUT_A 输出奇数位有效数据，DOUT_B 输出偶数位有效数据，DOUT_C 固定输出全0
+            				if (valid_counter % 2 == 1)
+              				dout_a_reg <= data_buffer[i][9:2];
+            				else
+              				dout_b_reg <= data_buffer[i][9:2];
+            				dout_c_reg <= 0;
+             		    end
+
+          		1: begin
+           		 // MODE = 1
+			            	if (valid_counter % 2 == 1)
+              				dout_a_reg <= data_buffer[89-i][9:2];
+            				else
+              				dout_b_reg <= data_buffer[89-i][9:2];
+            				dout_c_reg <= 0;	
+          		    end
+
+          		2: begin
+            		// MODE = 2
+               				if (valid_counter % 3 == 1)
+             				dout_a_reg <= data_buffer[i][9:2];
+            				else if(valid_counter % 3 == 2)
+             		 		dout_b_reg <= data_buffer[i][9:2];
+				else if(valid_counter % 3 == 0)
+            				dout_c_reg <= data_buffer[i][9:2] ;
+                                    end
+
+          		3: begin
+           		 // MODE = 3
+               				if (valid_counter % 3 == 1)
+             				dout_a_reg <= data_buffer[89-i][9:2];
+            				else if(valid_counter % 3 == 2)
+             		 		dout_b_reg <= data_buffer[89-i][9:2];
+				else if(valid_counter % 3 == 0)
+            				dout_c_reg <= data_buffer[89-i][9:2] ;
+          		    end
+
+          		default: begin
+            				dout_a_reg <= 0;
+            				dout_b_reg <= 0;
+            				dout_c_reg <= 0;
+                        	              end
+        		endcase
+                          end 
+
+   valid_reg <= valid_counter > 0;  // 有效数据计数器大于0时，VALID 为高电平
+  end
+end
+// 生成 CLK_OUT 信号
+always @(posedge CLK_48MHZ or negedge RST)
+begin 
+	if (!RST)
+	begin 
+		compare_value <= 0;
+		clk_counter <= 0;
+		clk_out <= 0;
+	end else 
+		begin
+			// 计算比较器的阈值
+			compare_value = SYS_CLK_FREQ / OUT_CLK_FREQ;
+    
+			// 在每个上升沿将计数器加1
+			clk_counter <= clk_counter + 1;
+			
+			if (clk_counter >= compare_value)
+		    begin
+			  // 达到阈值时，将输出时钟取反
+			  clk_out <= ~clk_out;
+			  clk_counter <= 0;
+		    end
+		end
+end
+ 
+
+  assign DOUT_A = dout_a_reg;
+  assign DOUT_B = dout_b_reg;
+  assign DOUT_C = dout_c_reg;
+  assign CLK_OUT = clk_out;
+  assign VALID = valid_reg;
+
+endmodule
